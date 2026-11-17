@@ -1,0 +1,59 @@
+#!/bin/bash
+# tinywin-update — the only update mechanism, on purpose: one button.
+set -u
+export PATH="$PATH:/usr/sbin:/sbin"
+export DEBIAN_FRONTEND=noninteractive
+DPKG_OPTS="-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+
+zenity --info --title="tinywin updates" --width=440 \
+  --text="<b>Checking for updates…</b>" &
+SPLASH=$!
+sudo -n apt-get update -qq >/tmp/tinywin-apt-update 2>&1 || true
+kill "$SPLASH" 2>/dev/null
+
+COUNT="$(apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst' || true)"
+COUNT="${COUNT:-0}"
+
+if [ "$COUNT" -eq 0 ]; then
+  zenity --info --title="tinywin updates" --width=440 \
+    --text="<b>You are up to date.</b>
+
+System: tinywin 1.0 ($(uname -m))
+Kernel: $(uname -r)
+Nothing to install."
+  exit 0
+fi
+
+LIST="$(apt-get -s full-upgrade 2>/dev/null | awk '/^Inst/{print "  • " $2}' | head -12)"
+MORE=""
+[ "$COUNT" -gt 12 ] && MORE="
+  … and $((COUNT - 12)) more"
+
+zenity --question --title="tinywin updates" --width=560 --ok-label="Install updates" \
+  --text="<b>$COUNT update(s) available</b>
+$LIST$MORE
+
+Updates come from Debian's archive. Your config files are kept.
+Continue?" || exit 0
+
+xfce4-terminal --title="Updating tinywin — do not close this window" --hold --geometry=100x30 \
+  -x bash -c "
+    echo '=== Updating tinywin ==='; echo
+    sudo -n apt-get update || { echo 'Could not reach the repository (online?)'; read -r; exit 1; }
+    echo; echo '=== Installing updates ==='; echo
+    sudo -n apt-get -y $DPKG_OPTS full-upgrade
+    echo; echo '=== Cleaning up ==='
+    sudo -n apt-get -y autoremove --purge
+    sudo -n apt-get clean
+    echo
+    if [ -f /var/run/reboot-required ]; then
+      echo '======================================================='
+      echo ' A restart is needed to finish (core system package changed).'
+      echo ' Menu -> Log Out -> Restart when convenient.'
+      echo '======================================================='
+      notify-send -a tinywin 'Restart to finish updating'
+    else
+      echo 'All done - no restart needed.'
+      notify-send -a tinywin 'tinywin is up to date'
+    fi
+    echo; echo 'Press Enter to close.'; read -r" &

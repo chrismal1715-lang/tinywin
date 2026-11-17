@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=tinywin first run
+Comment=Keep wallpaper, audio and app folders consistent
+Exec=/usr/local/bin/tinywin-firstrun
+Terminal=false
+NoDisplay=true
+OnlyShowIn=XFCE;

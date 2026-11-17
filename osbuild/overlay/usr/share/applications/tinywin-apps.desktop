@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Get apps
+Comment=Install a browser or other program from Debian
+Exec=/usr/local/bin/tinywin-apps
+Icon=applications-other
+Terminal=false
+Categories=System;PackageManager;
+Keywords=install;browser;firefox;chrome;vlc;

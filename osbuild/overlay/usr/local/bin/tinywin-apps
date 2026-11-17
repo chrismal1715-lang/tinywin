@@ -1,0 +1,36 @@
+#!/bin/bash
+# tinywin-apps — deliberately small app shop: browsers and the odd extra.
+set -u
+export PATH="$PATH:/usr/sbin:/sbin"
+CHOICE="$(zenity --list --title="Get apps" --width=620 --height=450 \
+  --text="<b>Nothing is preinstalled except the desktop.</b>
+Pick what you want; tinywin installs it and puts it in the Start menu.
+
+(Browsers are about 100–250 MB of downloads.)" \
+  --hide-column=1 --print-column=2 --column="id" --column="App" --column="Package" --column="Notes" \
+  1  "Mozilla Firefox"        "firefox-esr"  "Full browser, Debian's default" \
+  2  "Firefox (Flatpak)"      "flatpak"      "Install Flatpak support + Flathub" \
+  3  "Chromium"               "chromium"     "Chrome engine, no Google account needed" \
+  4  "VLC media player"       "vlc"          "Plays anything" \
+  5  "LibreOffice (only if you must)" "libreoffice-writer" "One document editor" \
+  6  "Archive tools (7z, rar, etc.)" "unrar-free p7zip-full" "Extract more formats" \
+  7  "PDF viewer"             "evince"       "Simple document viewer" \
+  8  "Image viewer / editor"  "ristretto gimp" "Look at and edit pictures" \
+  9  "Remote desktop (to ChromeOS)" "remmina" "RDP/VNC client" \
+  10 "Fonts: MS-compatible"   "fonts-liberation fonts-crosextra-carlito" "Better web fonts" \
+  11 "Wireless diagnostics"   "iw rfkill"    "Already included; reinstalls" 2>/dev/null)" || exit 0
+[ -n "$CHOICE" ] || exit 0
+case "$CHOICE" in
+"Firefox (Flatpak)") PKGS="flatpak gnome-software-plugin-flatpak" ;;
+"Mozilla Firefox")   PKGS="firefox-esr" ;;
+*)                   PKGS="$CHOICE" ;;
+esac
+xfce4-terminal --title="Installing: $PKGS" --hold --geometry=100x26 \
+  -x bash -c "echo 'Installing: $PKGS'; echo
+    sudo -n apt-get update
+    sudo -n apt-get install -y $PKGS
+    case '$PKGS' in *flatpak*)
+      flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo && \
+      echo 'Flathub added — now:  flatpak install flathub org.mozilla.firefox' ;;
+    esac
+    echo; echo 'Finished. Press Enter.'; read -r" &

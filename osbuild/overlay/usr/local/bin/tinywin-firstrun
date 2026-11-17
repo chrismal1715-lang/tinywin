@@ -1,0 +1,70 @@
+#!/bin/bash
+# tinywin-firstrun — runs at every login (~50 ms) and keeps the desktop
+# consistent even if a config is clobbered or the monitor name differs.
+set -u
+WALL=/usr/share/backgrounds/tinywin/aurora.png
+LOCK="/tmp/tinywin-firstrun.${XDG_SESSION_ID:-0}"
+[ -e "$LOCK" ] && exit 0
+: > "$LOCK" 2>/dev/null || true
+
+# ---------------------------------------------------------------- wallpaper --
+# xfdesktop keys wallpapers per monitor output (monitor0, Virtual-1, eDP-1 …),
+# so apply to every monitor we can discover, plus any X output name.
+set_wall() {
+  local m="$1"
+  for ws in workspace0 workspace1 workspace2 workspace3; do
+    xfconf-query -c xfdesktop -p "/backdrop/screen0/$m/$ws/last-image" -n -t string -s "$WALL" 2>/dev/null
+    xfconf-query -c xfdesktop -p "/backdrop/screen0/$m/$ws/image-style" -n -t int -s 5 2>/dev/null
+    xfconf-query -c xfdesktop -p "/backdrop/screen0/$m/$ws/color-style" -n -t int -s 1 2>/dev/null
+    xfconf-query -c xfdesktop -p "/backdrop/screen0/$m/$ws/color1" -n -t string -s "#16232e" 2>/dev/null
+  done
+}
+if [ -f "$WALL" ] && command -v xfconf-query >/dev/null; then
+  KNOWN="$(xfconf-query -c xfdesktop -l 2>/dev/null | sed -n 's|^/backdrop/screen0/\([^/]*\)/.*|\1|p' | sort -u)"
+  XOUT="$(xrandr --listmonitors 2>/dev/null | awk 'NR>1 && NF>3 {print $NF}' | head -3)"
+  for m in $KNOWN $XOUT; do set_wall "$m"; done
+  xfdesktop --reload >/dev/null 2>&1 &
+fi
+
+# ------------------------------------------------------------------- audio ---
+command -v wpctl >/dev/null && {
+  wpctl set-mute @DEFAULT_AUDIO_SINK@ 0 >/dev/null 2>&1
+  wpctl set-volume @DEFAULT_AUDIO_SINK@ 65% >/dev/null 2>&1
+  wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 0 >/dev/null 2>&1
+}
+
+# --------------------------------------------------------------- app folders --
+mkdir -p "$HOME/Applications" "$HOME/.local/bin" "$HOME/.local/share/applications" 2>/dev/null || true
+
+# ------------------------------------------------- default app associations ---
+if [ ! -f "$HOME/.config/mimeapps.list" ]; then
+  mkdir -p "$HOME/.config"
+  cat > "$HOME/.config/mimeapps.list" <<'INI'
+[Default Applications]
+application/zip=xarchiver.desktop
+application/x-7z-compressed=xarchiver.desktop
+application/x-tar=xarchiver.desktop
+application/gzip=xarchiver.desktop
+application/x-xz=xarchiver.desktop
+application/x-compressed-tar=xarchiver.desktop
+application/vnd.debian.binary-package=tinywin-install.desktop
+application/x-iso9660-appimage=tinywin-install.desktop
+application/x-appimage=tinywin-install.desktop
+text/x-shellscript=tinywin-install.desktop
+
+[Added Associations]
+application/vnd.debian.binary-package=tinywin-install.desktop;
+application/x-iso9660-appimage=tinywin-install.desktop;
+INI
+fi
+command -v xset >/dev/null && xset b off 2>/dev/null
+
+# ------------------------------------------------------------- first welcome --
+FLAG="$HOME/.config/tinywin/welcomed"
+if [ ! -e "$FLAG" ]; then
+  mkdir -p "$(dirname "$FLAG")"; : > "$FLAG"
+  notify-send -a tinywin -i dialog-information \
+    "Welcome to tinywin" \
+    "Install app (Menu) handles .zip, .tar, .deb and .AppImage. Updates live next to it." 2>/dev/null
+fi
+exit 0

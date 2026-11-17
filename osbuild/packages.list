@@ -1,0 +1,135 @@
+# ---------------------------------------------------------------------------
+# tinywin package set — deliberately short. If it isn't here, it isn't shipped.
+# Rule: a package has to (a) make the hardware work, (b) be part of the desktop
+# you see, or (c) let you install something else without a terminal.
+# ---------------------------------------------------------------------------
+
+# ---- base system ---------------------------------------------------------
+systemd-sysv
+initramfs-tools
+linux-image-amd64
+libpam-systemd
+sudo
+ca-certificates
+curl
+wget
+nano
+htop
+rsync
+file
+locales
+tzdata
+console-setup
+keyboard-configuration
+polkitd
+pkexec
+xdg-user-dirs
+
+# ---- archives & portable-app support ("zips like Windows") ---------------
+unzip
+zip
+p7zip-full
+xz-utils
+bzip2
+gzip
+tar
+libfuse2t64
+libnss3
+libgbm1
+libasound2t64
+libxss1
+libxtst6
+libgtk-3-0t64
+
+# ---- hardware: drivers and firmware -------------------------------------
+firmware-linux
+firmware-iwlwifi
+firmware-atheros
+firmware-realtek
+firmware-mediatek
+firmware-misc-nonfree
+firmware-sof-signed
+bluez
+systemd-timesyncd
+gdisk
+dosfstools
+fdisk
+e2fsprogs
+parted
+libnotify-bin
+intel-microcode
+alsa-ucm-conf
+alsa-utils
+iw
+rfkill
+
+# ---- graphics -----------------------------------------------------------
+xserver-xorg
+xserver-xorg-input-libinput
+xserver-xorg-video-intel
+libgl1-mesa-dri
+mesa-utils
+intel-media-va-driver
+libva2
+x11-xserver-utils
+x11-utils
+
+# ---- display manager & session ------------------------------------------
+lightdm
+lightdm-gtk-greeter
+dbus-x11
+xfce4-session
+xfwm4
+xfce4-panel
+xfdesktop4
+xfce4-settings
+xfce4-appfinder
+libxfce4ui-utils
+xfconf
+
+# ---- the four things you asked for: file manager, themes, updates, apps ---
+thunar
+thunar-volman
+thunar-archive-plugin
+xarchiver
+xfce4-terminal
+mousepad
+gnome-themes-extra
+arc-theme
+papirus-icon-theme
+adwaita-icon-theme
+hicolor-icon-theme
+fonts-dejavu-core
+fonts-liberation
+fonts-noto-color-emoji
+zenity
+gvfs
+gvfs-backends
+xdg-utils
+desktop-file-utils
+shared-mime-info
+
+# ---- small quality-of-life ----------------------------------------------
+xfce4-whiskermenu-plugin
+xfce4-taskmanager
+xfce4-notifyd
+xfce4-power-manager
+xfce4-screenshooter
+xfce4-pulseaudio-plugin
+xfce4-clipman-plugin
+xfce4-datetime-plugin
+xfce4-systemload-plugin
+
+# ---- networking & audio (GUI-managed) -----------------------------------
+network-manager
+network-manager-gnome
+wpasupplicant
+pipewire
+pipewire-pulse
+wireplumber
+
+# ---- bootloader pieces, kept in the image so you can repair boot later ---
+grub-common
+grub2-common
+grub-pc-bin
+grub-efi-amd64-bin

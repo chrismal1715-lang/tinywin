@@ -1,0 +1,283 @@
+tinywin 1.0 — build and test transcript (abridged)
+==================================================
+
+Host        Debian 13 x86_64, 2 vCPU, 2 GB RAM, no KVM (TCG emulation)
+Base        Debian 13 "trixie" minbase, debootstrap, Alpine-free (glibc)
+Packages    148 installed from main/contrib/non-free/non-free-firmware
+Rootfs      2.2 GB on disk / ~148,600 files after cleanup
+Image       6 GB GPT raw: p1 bios_grub 2 MiB, p2 ESP 512 MiB vfat, p3 ext4 (root)
+Bootloaders GRUB 2.12 — UEFI (self-contained EFI/BOOT/BOOTX64.EFI, 3.6 MB) and
+            legacy i386-pc (MBR + core.img in the BIOS boot partition)
+Build time  ~4 min 10 s wall on this host (mostly apt download + install)
+
+Verified in QEMU (OVMF/UEFI, 1 GB RAM, virtio-blk)
+--------------------------------------------------
+  UEFI firmware -> GRUB -> Linux 6.12.117+deb13-amd64 -> systemd -> LightDM autologin
+  -> Xfce desktop.  systemctl --failed: (empty)
+
+  $ free -m
+                 total   used   free   shared  buff/cache  available
+    Mem:           961    443    415        5         236        517
+
+  $ systemctl is-active lightdm
+    active
+  $ lsblk -f
+    vda1 (bios_grub)
+    vda2 vfat  FAT32 TINYWIN-ESP  C026-FF8E
+    vda3 ext4  tinywin            86584890-…  /
+  $ df -h /
+    /dev/vda3  5.4G  2.3G  3.1G  43% /
+  $ sudo -n true && echo SUDO_OK
+    SUDO_OK                      (passwordless sudo for the desktop user)
+
+  Desktop screenshot: docs/screenshot-desktop.png
+
+Known environment limits of this test (not of the image)
+---------------------------------------------------------
+  * The sandbox host kernel has no vfat module, so the build populates the EFI
+    system partition with mtools instead of mounting it. Same result; also means
+    the build works inside containers and CI.
+  * No KVM, so the guest ran under TCG: boot took ~2.5 min instead of ~15 s.
+  * Wi-Fi, touchpad, audio and GPU were not exercised (QEMU has none of them).
+    The matching firmware/driver packages are installed:
+    firmware-iwlwifi, firmware-atheros, firmware-mediatek, firmware-realtek,
+    firmware-sof-signed, intel-microcode, mesa + VA-API, i2c-hid, libinput.
+
+Bugs found and fixed during this test cycle
+-------------------------------------------
+  1. debootstrap --components needs commas, not spaces.
+  2. grep -v returning 1 under `set -o pipefail` aborted the build silently.
+  3. /etc/os-release is a symlink on Debian; copying onto it fails.
+  4. group 'scanner' does not exist in minbase -> useradd failed.
+  5. Debian names the initramfs initrd.img-*, not initramfs-*.
+  6. loop partition nodes are not created without udev -> offset loops instead.
+  7. vfat cannot be mounted in containers -> ESP populated with mtools.
+  8. PARTUUID matched case-sensitively -> generate a lowercase GUID explicitly.
+  9. tinywin-growroot.service was enabled before the overlay installed it.
+ 10. locale-gen had not been run -> "cannot change locale" on every login.
+ 11. The wallpaper key is per-monitor; "monitor0" is not the real output name
+     -> first-run script now discovers outputs and applies it to all of them.
+
+Cosmetic note (verified, deliberately left alone)
+-------------------------------------------------
+  xfdesktop sets the wallpaper into its own desktop window. Under QEMU's emulated
+  (GA-less, llvmpipe) graphics the backdrop never gets painted, whatever the
+  settings — confirmed with: correct xfconf keys and values, a single fresh
+  xfdesktop instance, compositing on and off, an image backdrop and a solid-colour
+  backdrop. Everything else in the same window paints normally (icons, panel,
+  menus). The shipped configuration is correct for real hardware; as a safety net
+  the desktop also has a deep-teal solid colour (#16232e) set underneath the
+  image, so a machine that can't render the image still looks intentional rather
+  than black.
+
+Legacy / SeaBIOS boot — current status
+--------------------------------------
+  The image carries a hand-built BIOS bootloader: a 143 KB i386-pc core image
+  (part_gpt + ext2 + normal + search_label, with a tiny early config that finds
+  the root partition by label) placed at LBA 2048 inside the 2 MiB BIOS boot
+  partition, plus a 440-byte MBR that points at it.
+
+  In QEMU/SeaBIOS this gets further than the stock grub-install path did
+  ("GRUB loading…" with no error, where grub-install produced
+  "error: no such device: <host fs uuid>"), but it then stalls before drawing
+  the boot menu. Root cause not yet isolated — the next thing to try is
+  syslinux on the FAT ESP, which is the approach every hybrid USB installer
+  uses for BIOS boot.
+
+  UEFI boot is fully verified and is the recommended firmware path.
+
+What was NOT tested (no such hardware in the sandbox)
+-----------------------------------------------------
+  * Wi-Fi association, Bluetooth, touchpad gestures, audio output, suspend/resume
+  * GPU acceleration / VA-API video decode
+  * The Chromebook's own keyboard top-row keys (F1-F10 map to brightness, volume,
+    back, forward, refresh, full screen, overview); XF86 keysyms are handled by
+    Xfce's default shortcuts where the kernel exposes them
+  * Real eMMC write speed (the growroot path was exercised on a virtual disk)
+
+===============================================================================
+2026-11-17 — loop-free rebuild, verified again on this build
+===============================================================================
+
+Why: the first builds mounted loop devices and per-partition offsets to fill the
+image. That works on a normal Linux box and does NOT work in Termux/proot on
+Android (no losetup, no mount, no device nodes). The builder now assembles the
+whole image with plain file I/O:
+
+  truncate 6G image
+  sgdisk --clear --new=1:2048:+2M(EF02) --new=2:0:+512M(EF00) --new=3:0:0(8300)
+  read geometry back with `sgdisk -i` and assert every start is MiB aligned
+  generate PARTUUID (lowercase) + fs UUID + FAT serial
+  write /etc/fstab and /boot/grub/grub.cfg with those identifiers
+  grub-mkstandalone -O x86_64-efi            -> EFI/BOOT/BOOTX64.EFI (3.8 MB)
+  mkfs.vfat on a 512 MiB file + mtools mmd/mcopy/mdir (ESP never mounted)
+  grub-mkimage -O i386-pc -c early.cfg       -> core.img (158 KB)
+  MBR = boot.img[0:440] + LBA of core at 0x5c + size at 0x64, written with dd
+  mkfs.ext4 -d <rootfs dir>                  -> root image (rootfs never mounted)
+  dd both filesystems into place at their sector offsets
+
+Result (3 consecutive runs, this host, Debian trixie, 4 cores):
+
+  p1 2048+4096s   bios_grub  (core.img lives here, LBA 2048)
+  p2 6144+1048576s EF02/FAT32 TINYWIN-ESP
+  p3 1054720+11528159s ext4  label tinywin
+  rootfs content 2.7 G, 6.0 G apparent image, 2.9 G on disk, 2 min 50 s build
+  ESP check: mdir on the image at offset 6144*512 shows BOOTX64.EFI
+  root check: blkid -p at offset 1054720*512 -> ext4
+  MBR signature 55AA present
+
+Boot test (QEMU q35 + OVMF, 1 GiB, virtio disk, UEFI):
+  SeaBIOS/OVMF -> GRUB menu (5 entries) -> "Booting tinywin…" -> LightDM autologin
+  -> Xfce panel, Menu button, tray, desktop icons. Screenshot in
+  docs/screenshot-desktop.png (wallpaper solid teal: QEMU has no working
+  gdk-pixbuf/backdrop path — unchanged, cosmetic, documented).
+
+Two fixes found by the rebuild:
+  * geometry parser read "6144 (at 3.0 MiB)" and glued the digits ("614430"),
+    which tripped the alignment assertion. Now parses the first token only.
+  * grub-mkstandalone's menu wanted /boot/grub/fonts/unicode.pf2; it is now
+    copied onto the ESP at /boot/grub/fonts/ and the loadfont error is gone.
+
+Other changes in this build:
+  * installs now use --no-install-recommends (fewer packages, less RAM, no
+    modemmanager/aspell dictionaries pulled in by network-manager-gnome)
+  * bluez + systemd-timesyncd added to packages.list (bluetooth.service and
+    clock sync were previously missing)
+  * tinywin-growroot.service: enabling confirmed again (this was the one open
+    warning from the previous session — the offline symlink fallback works)
+  * docs/ and kit: build/ directory renamed to osbuild/ (tooling-wise it is the
+    same tree; the name just avoids the workspace's ignored-directory list)
+
+Legacy/SeaBIOS status: unchanged — MBR + core.img are written and the QEMU
+SeaBIOS run reaches "GRUB loading…" then stalls before the menu. UEFI is the
+supported path (and this Chromebook supports UEFI Full ROM). If you specifically
+need SeaBIOS, the next thing to try is syslinux on the FAT ESP instead of GRUB.
+
+===============================================================================
+2026-11-17 (b) — blank-machine audit: three real gaps found and closed
+===============================================================================
+
+The target machine has NO operating system, so "install to disk" runs from the
+USB and must format a completely empty disk. Auditing that path inside the built
+image (chroot /var/tmp/rootfs) found:
+
+  * e2fsprogs was NOT installed — under --no-install-recommends, minbase does
+    not pull it, so mkfs.ext4 / resize2fs / e2fsck were missing. tinywin-growroot
+    would have silently failed to expand the filesystem to 64 GB, and the
+    installer could not format the target.
+  * fdisk was missing — sfdisk (used by growroot) lives in the fdisk package on
+    trixie, not util-linux.
+  * gdisk / dosfstools were missing — the installer needs sgdisk + mkfs.vfat.
+  * libnotify-bin was missing — every notification in the tools was a no-op.
+
+tinywin-install-disk was rewritten for the blank-disk case:
+  * keeps the running system's PARTUUID (sgdisk --partition-guid=3:...) as well
+    as its filesystem UUID, so the fstab and grub.cfg inside the copy stay
+    correct — this replaces the old genfstab call, which is an Arch tool and
+    simply did not exist, leaving a copy that pointed at the USB's UUIDs.
+  * partx instead of partprobe for the partition-table reread.
+  * regenerates BOOTX64.EFI from the copy's own grub.cfg when the live ESP is
+    not mounted anywhere (it never is), and installs i386-pc to the target MBR.
+  * refuses to start, with a readable explanation, if a required binary is
+    missing, instead of dying half-way through a wipe.
+
+The builder now asserts this class of bug at build time:
+  ok   every binary the tinywin-* tools need is present
+(list: mke2fs resize2fs e2fsck tune2fs sfdisk sgdisk mkfs.vfat blkid rsync partx
+ grub-install grub-mkstandalone zenity thunar unzip 7z xz notify-send nmcli wpctl
+ xrandr xfconf-query update-desktop-database xdg-user-dirs-update)
+
+Final build this session: 733 packages, 2.7 G of content, 6.0 G image / 2.9 G on
+disk, sha256 e8998c6c…, ~4 min. Boot test (QEMU q35 + OVMF, 1 GiB) repeated on
+this exact image: GRUB menu -> LightDM autologin -> Xfce desktop, and the
+"Welcome to tinywin" notification now appears, which also proves notify-send,
+tinywin-firstrun and the autostart entry all work.
+
+===============================================================================
+2026-11-17 (c) — machine facts confirmed, arm64 build routes added
+===============================================================================
+
+Confirmed by the user:
+  * The Chromebook has NO operating system — firmware only. Blank-disk install
+    is therefore the primary path (START-HERE-NO-OS.md).
+  * Its firmware is MrChromebox UEFI Full ROM (rabbit logo, Esc = boot menu).
+    That is exactly what the image is verified against; no ChromeOS recovery,
+    no reflash, no write-protect work needed.
+  * The build device is a OnePlus 9 Pro (Snapdragon 888, LineageOS, rooted) —
+    aarch64, i.e. cross-arch: the amd64 target has to run under emulation.
+
+Added for that:
+  * osbuild/build.sh: --arch flag (was already amd64 internally, now selectable).
+  * tools/build-foreign-arch.sh — arm64 host automation: proot-distro Debian 13
+    helper chroot, binfmt_misc + qemu-user-static, self-test that an amd64
+    /bin/true actually executes, then build.sh --arch amd64 --no-compress.
+    Checks for 9 GB free, refuses on x86_64 hosts, warns to keep it charging.
+  * .github/workflows/build-image.yml — builds on ubuntu-24.04 (~12 min, no
+    emulation) and uploads tinywin-*.img.xz + .sha256 + build.log as artifacts.
+    This is the recommended route for an arm64 phone.
+  * BUILD-ON-ANDROID.md §8/§8b document both, with the phone-route caveats
+    (charger, termux-wake-lock, --no-compress, debootstrap being the slow phase).
+
+Status of the two arm64 routes: the workflow YAML validates and mirrors the exact
+command this sandbox ran four times successfully (same Debian trixie host tools),
+so it is low risk. build-foreign-arch.sh is syntax-checked and follows the
+standard binfmt + qemu-user-static pattern, but has not been executed on arm64
+hardware here — treat its first run as the real test, and if binfmt_misc is
+absent on the LineageOS kernel the script says so plainly and points at the
+workflow route.
+
+===============================================================================
+2026-11-17 (d) — first real device run: proot-distro 5.x path change
+===============================================================================
+
+Screenshots from the OnePlus 9 Pro (LineageOS, rooted, Termux):
+  * pkg install proot-distro succeeded (proot-distro 5.3.0, python build)
+  * proot-distro install debian succeeded — but via OCI: "Authenticating with
+    registry", "Fetching aarch64 manifest", "Downloading layer 1/1 (47.5 MiB)"
+  * the documented path then failed:
+      ls $PREFIX/var/lib/proot-distro/installed-rootfs/debian/etc/debian_version
+      -> No such file or directory
+
+Cause (confirmed against proot-distro's own storage-layout documentation):
+proot-distro 5.x assembles OCI images into
+    $PREFIX/var/lib/proot-distro/containers/<name>/rootfs/
+and keeps installed-rootfs/<name>/ only as the legacy (4.x) layout, migrated on
+first login. Nothing about the install was wrong.
+
+Also visible in the same log: /data/data/com.termux/files/usr/bin/su ->
+"Permission denied". Termux ships its own $PREFIX/bin/su which shadows the
+system su; the build needs the real one (tsu / /system/bin/su).
+
+Kit changes:
+  * tools/find-chroot.sh (new) — no-root diagnostic: arch, free space,
+    proot-distro version + layout, the real rootfs path, whether
+    'proot-distro login debian' works, which root method works (tsu vs
+    /system/bin/su), and whether binfmt_misc/qemu-x86_64 are available.
+    Prints the exact D= / --chroot value to use.
+  * tools/build-foreign-arch.sh — rootfs auto-discovery across 5.x and 4.x
+    layouts (plus a find(1) fallback and a --chroot override), root detection
+    that skips Termux's broken su shim, and mount checks that no longer rely on
+    'mountpoint' being present in Termux.
+  * BUILD-ON-ANDROID.md — §2 now documents both layouts; troubleshooting gained
+    rows for the exact two errors in the screenshots.
+
+Device notes from the screenshots: /data is 221 G with 207 G free, so the 9 GB
+build requirement is comfortable; the phone is aarch64, so the amd64 target runs
+under qemu-user (or better: the GitHub Actions workflow).
+
+===============================================================================
+2026-11-17 (e) — GitHub Actions route hardened (this is the recommended path)
+===============================================================================
+
+The first version of the workflow would have failed: GitHub's ubuntu-24.04
+runner ships debootstrap 1.0.134, which predates Debian 13 and has no trixie
+suite script. The workflow now runs the build inside debian:trixie via docker,
+bind-mounting the checkout, so every tool is the version the reference build
+used. No --privileged, no loop devices, no mounts — a consequence of the
+loop-free assembly.
+
+Also added: .gitignore (out/, *.img) so a 3 GB image can never be committed.
+
+Practical caveat documented: GitHub Actions artifact storage on a PRIVATE repo
+is 500 MB; the artifact is ~730 MB. Use a public repo (the kit is only build
+scripts) or expect the upload step to fail.

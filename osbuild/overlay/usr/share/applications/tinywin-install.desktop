@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Install app
+Comment=Install a .deb, .AppImage, .zip or .tar file you downloaded
+Exec=/usr/local/bin/tinywin-install %f
+Icon=system-software-install
+Terminal=false
+Categories=Utility;System;
+MimeType=application/vnd.debian.binary-package;application/x-iso9660-appimage;application/x-appimage;application/zip;application/x-tar;application/x-7z-compressed;application/gzip;application/x-xz;application/x-compressed-tar;application/x-bzip2;text/x-shellscript;
+Keywords=install;package;zip;deb;appimage;extract;

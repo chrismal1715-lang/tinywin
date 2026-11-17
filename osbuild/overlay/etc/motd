@@ -1,0 +1,13 @@
+
+  tinywin 1.0 — lean desktop for the CX22NA
+
+  Everything you need is in the Start menu (bottom left):
+    Install app · Updates · Themes · Get apps · System info · File manager
+
+  Handy commands
+    tinywin-install <file>   install a .deb / .AppImage / .zip / .tar
+    tinywin-update           system updates (no background daemons)
+    tinywin-theme            change theme, icons, wallpaper
+    tinywin-growroot         fill the disk with the root filesystem
+    tinywin-info --text      RAM, disk, network, processes
+

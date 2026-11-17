@@ -1,0 +1,45 @@
+#!/bin/bash
+# tinywin-growroot — expand the root partition + filesystem to fill the disk.
+# Runs automatically each boot (fast no-op when there is nothing to do).
+set -u
+AUTO=0
+[ "${1:-}" = "--auto" ] && AUTO=1
+say() { [ "$AUTO" = 1 ] && return 0; echo "$@"; }
+logger -t tinywin-growroot "$*" 2>/dev/null || true
+
+SRC="$(findmnt -no SOURCE /)"
+[ -b "$SRC" ] || { say "root is not on a block device ($SRC)"; exit 0; }
+PARTDEV="$(readlink -f "$SRC")"
+PARTNAME="$(basename "$PARTDEV")"
+DISKNAME="$(lsblk -no PKNAME "$PARTDEV" | head -1)"
+[ -n "$DISKNAME" ] || { say "root is not on a partitioned disk"; exit 0; }
+DISK="/dev/$DISKNAME"
+PARTNUM="$(cat "/sys/class/block/$PARTNAME/partition" 2>/dev/null)"
+[ -n "${PARTNUM:-}" ] || { say "cannot determine partition number"; exit 0; }
+
+DISK_SECTORS="$(blockdev --getsz "$DISK")"
+read -r P_START P_SIZE < <(sfdisk -d "$DISK" 2>/dev/null | awk -v d="$PARTDEV" '
+  $1==d || $1==d":" { s=""; z="";
+    for (i=1;i<=NF;i++) {
+      if ($i ~ /^start=/) { gsub(/[^0-9]/,"",$i); s=$i }
+      if ($i ~ /^size=/)  { gsub(/[^0-9]/,"",$i); z=$i }
+    }
+    print s, z; exit }')
+[ -n "${P_START:-}" ] && [ -n "${P_SIZE:-}" ] || { say "cannot read partition layout"; exit 0; }
+
+LAST_USABLE=$(( DISK_SECTORS - 34 - 2048 ))
+GROW_BY=$(( LAST_USABLE - (P_START + P_SIZE) ))
+if [ "$GROW_BY" -lt 4096 ]; then
+  say "root already fills the disk (slack ${GROW_BY} sectors)"; exit 0
+fi
+say "growing $PARTDEV by ~$(( GROW_BY / 2048 )) MiB to fill $DISK"
+printf ',+\n' | sfdisk --force --no-reread -N "$PARTNUM" "$DISK" >/dev/null 2>&1 || {
+  say "sfdisk failed (read-only disk?)"; exit 0; }
+partx -u "$DISK" 2>/dev/null || blockdev --rereadpt "$DISK" 2>/dev/null || true
+sync; sleep 1
+if resize2fs "$PARTDEV" >/dev/null 2>&1; then
+  say "done: $(df -h / | awk 'NR==2{print $2" total, "$4" free"}')"
+else
+  say "partition table updated; reboot then run: resize2fs $PARTDEV"
+fi
+exit 0

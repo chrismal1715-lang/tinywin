@@ -1,0 +1,108 @@
+#!/bin/bash
+# tinywin-theme — theme, icons AND wallpaper in one place.
+set -u
+export PATH="$PATH:/usr/sbin:/sbin"
+BG=/usr/share/backgrounds/tinywin
+
+apply_gtk() {   # $1 gtk theme  $2 icon theme
+  xfconf-query -c xsettings -p /Net/ThemeName     -n -t string -s "$1" 2>/dev/null || \
+    xfconf-query -c xsettings -p /Net/ThemeName     -s "$1"
+  xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s "$2" 2>/dev/null || \
+    xfconf-query -c xsettings -p /Net/IconThemeName -s "$2"
+  for d in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
+    mkdir -p "$d"
+    printf '[Settings]\ngtk-theme-name=%s\ngtk-icon-theme-name=%s\n' "$1" "$2" > "$d/settings.ini"
+  done
+}
+apply_wm()   { xfconf-query -c xfwm4 -p /general/theme -n -t string -s "$1" 2>/dev/null || \
+               xfconf-query -c xfwm4 -p /general/theme -s "$1"; }
+apply_wall() {
+  [ -f "$1" ] || return 0
+  for m in $(xfconf-query -c xfdesktop -l 2>/dev/null | sed -n 's|^/backdrop/screen0/\([^/]*\)/.*|\1|p' | sort -u) \
+           $(xrandr --listmonitors 2>/dev/null | awk 'NR>1 && NF>3 {print $NF}'); do
+    for ws in workspace0 workspace1 workspace2 workspace3; do
+      xfconf-query -c xfdesktop -p "/backdrop/screen0/$m/$ws/last-image" -n -t string -s "$1" 2>/dev/null
+      xfconf-query -c xfdesktop -p "/backdrop/screen0/$m/$ws/image-style" -n -t int -s 5 2>/dev/null
+      xfconf-query -c xfdesktop -p "/backdrop/screen0/$m/$ws/color-style" -n -t int -s 1 2>/dev/null
+    done
+  done
+  xfdesktop --reload >/dev/null 2>&1 &
+}
+show() {
+  if command -v zenity >/dev/null; then
+    zenity --info --title="Themes" --width=420 --text="<b>Current look</b>
+
+GTK theme:   $(xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null)
+Icons:       $(xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null)
+Window style:$(xfconf-query -c xfwm4 -p /general/theme 2>/dev/null)
+Wallpaper:   $(xfconf-query -c xfdesktop -p /backdrop/screen0/monitor0/workspace0/last-image 2>/dev/null)"
+  else
+    echo "GTK: $(xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null)"
+    echo "Icons: $(xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null)"
+  fi
+}
+[ "${1:-}" = "--show" ] && { show; exit 0; }
+
+CHOICE="$(zenity --list --title="Themes" --width=560 --height=430 \
+  --text="<b>Pick a look</b> — theme, icons and wallpaper change together." \
+  --hide-column=1 --print-column=2 --column="id" --column="Look" --column="What you get" \
+  1 "Dark"          "Arc-Dark + Papirus-Dark + deep teal wallpaper" \
+  2 "Light"         "Arc + Papirus + light wallpaper" \
+  3 "Stock Xfce"    "Greybird + elementary icons, no wallpaper change" \
+  4 "Classic"       "Adwaita + Adwaita icons, flat and plain" \
+  5 "High contrast" "HighContrast + HighContrast icons, large fonts" \
+  6 "Just wallpaper…" "Choose a wallpaper image only" \
+  7 "Add my own theme…" "Copy a theme folder or .zip into your themes" \
+  8 "Reset to default"  "Back to Dark, as shipped" 2>/dev/null)" || exit 0
+[ -n "$CHOICE" ] || exit 0
+
+case "$CHOICE" in
+Dark)   apply_gtk "Arc-Dark" "Papirus-Dark"; apply_wm "Arc-Dark"
+        apply_wall "$BG/aurora.png"; show ;;
+Light)  apply_gtk "Arc" "Papirus"; apply_wm "Arc"
+        apply_wall "$BG/daylight.png"; show ;;
+"Stock Xfce") apply_gtk "Greybird" "elementary-Xfce"; apply_wm "Default"; show ;;
+Classic) apply_gtk "Adwaita" "Adwaita"; apply_wm "Default"; show ;;
+"High contrast")
+        apply_gtk "HighContrast" "HighContrast"; apply_wm "Default"
+        xfconf-query -c xsettings -p /Gtk/FontName -n -t string -s "Sans 13" 2>/dev/null || \
+          xfconf-query -c xsettings -p /Gtk/FontName -s "Sans 13"
+        show ;;
+"Just wallpaper…")
+  IMG="$(zenity --file-selection --title="Choose a wallpaper" \
+         --file-filter="Images | *.png *.jpg *.jpeg *.webp *.bmp *.svg" \
+         --filename="$HOME/Pictures/" 2>/dev/null)" || exit 0
+  [ -n "$IMG" ] || exit 0
+  apply_wall "$IMG"; show ;;
+"Add my own theme…")
+  SRC="$(zenity --file-selection --title="Theme folder or archive" 2>/dev/null)" || exit 0
+  [ -n "$SRC" ] || exit 0
+  mkdir -p "$HOME/.themes" "$HOME/.icons"
+  if [ -d "$SRC" ]; then
+    cp -rf "$SRC" "$HOME/.themes/" 2>/dev/null
+    notify-send -a tinywin "Theme copied" "$(basename "$SRC") — pick it in the list (reopen this window)." 2>/dev/null
+  else
+    TMP="$(mktemp -d)"
+    case "${SRC,,}" in
+      *.zip) unzip -qo "$SRC" -d "$TMP" ;;
+      *.tar.gz|*.tgz) tar -xzf "$SRC" -C "$TMP" ;;
+      *.tar.xz|*.txz) tar -xJf "$SRC" -C "$TMP" ;;
+      *) 7z x -y -o"$TMP" "$SRC" >/dev/null ;;
+    esac
+    INNER="$(find "$TMP" -maxdepth 3 -name index.theme -printf '%h\n' | head -1)"
+    if [ -n "$INNER" ]; then
+      if grep -qi '^\[X-GNOME-Metatheme\]' "$INNER/index.theme"; then
+        cp -rf "$INNER" "$HOME/.themes/"
+      else
+        cp -rf "$INNER" "$HOME/.icons/"
+      fi
+      notify-send -a tinywin "Theme installed" "$(basename "$INNER") — reopen Themes to select it." 2>/dev/null
+      command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q "$HOME/.icons/$(basename "$INNER")" 2>/dev/null
+    else
+      zenity --error --width=420 --text="That archive has no index.theme inside — it may not be a GTK theme." 2>/dev/null
+    fi
+    rm -rf "$TMP"
+  fi ;;
+"Reset to default") apply_gtk "Arc-Dark" "Papirus-Dark"; apply_wm "Arc-Dark"
+        apply_wall "$BG/aurora.png"; show ;;
+esac

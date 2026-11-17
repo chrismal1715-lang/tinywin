@@ -1,0 +1,14 @@
+[Unit]
+Description=tinywin: grow root filesystem to fill the disk
+After=local-fs.target
+Before=graphical.target
+ConditionPathIsReadWrite=/
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tinywin-growroot --auto
+RemainAfterExit=yes
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

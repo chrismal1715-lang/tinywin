@@ -1,0 +1,88 @@
+# ===========================================================================
+#  Build the tinywin image on GitHub's x86_64 runners: ~12 minutes, no PC,
+#  no emulation, no phone heat.
+#
+#  Runs the build inside a real Debian 13 (trixie) container, because the
+#  runner itself is Ubuntu 24.04 whose debootstrap predates trixie and cannot
+#  bootstrap it. Everything the builder needs is then identical to the
+#  reference build (which is Debian trixie).
+#
+#  Start it:  Actions -> "Build tinywin image" -> Run workflow
+#  Get it:    gh run download <run-id> -n tinywin-image   (or the web UI)
+# ===========================================================================
+name: Build tinywin image
+
+on:
+  workflow_dispatch:
+    inputs:
+      size:
+        description: 'Image size (6G fits the 64 GB eMMC with room to grow)'
+        default: '6G'
+        required: true
+      extra_pkgs:
+        description: 'Extra packages baked in (space separated, optional)'
+        default: ''
+        required: false
+  push:
+    branches: [main]
+    paths: ['osbuild/**', '.github/workflows/build-image.yml']
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build inside Debian 13
+        env:
+          SIZE: ${{ inputs.size || '6G' }}
+          EXTRA: ${{ inputs.extra_pkgs || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          docker run --rm --privileged=false \
+            -v "$PWD":/kit -v "$PWD/out":/out -w /kit \
+            -e SIZE="$SIZE" -e EXTRA="$EXTRA" \
+            debian:trixie bash -c '
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends \
+                debootstrap gdisk mtools dosfstools e2fsprogs fdisk rsync \
+                python3 xz-utils file ca-certificates \
+                grub-common grub-pc-bin grub-efi-amd64-bin
+              chmod +x osbuild/build.sh
+              ./osbuild/build.sh \
+                --size "$SIZE" \
+                --extra-pkgs "$EXTRA" \
+                --out /out --work /var/tmp/tinywin-build
+            '
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### tinywin build" >> "$GITHUB_STEP_SUMMARY"
+          (tail -15 out/build.log 2>/dev/null || echo "no log") >> "$GITHUB_STEP_SUMMARY"
+          ls -lh out >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload image
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinywin-image
+          path: |
+            out/tinywin-*.img.xz
+            out/tinywin-*.img.sha256
+            out/build.log
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinywin-build-log-failed
+          path: out/build.log
+          if-no-files-found: ignore
+          retention-days: 7

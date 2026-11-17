@@ -1,0 +1,44 @@
+#!/bin/bash
+# tinywin-info — the numbers that matter, in one screen.
+set -u
+MEMTOTAL="$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)"
+MEMAVAIL="$(awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo)"
+SWAPTOTAL="$(awk '/SwapTotal/{printf "%d", $2/1024}' /proc/meminfo)"
+ROOT="$(df -h / | awk 'NR==2{print $2" total, "$4" free ("$5" used)"}')"
+UPTIME="$(uptime -p 2>/dev/null | sed 's/^up //')"
+CPU="$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)"
+CORES="$(nproc)"
+KERNEL="$(uname -r)"
+DE="$(xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null)"
+WIFI="$(nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}')"
+IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+BAT="$(for b in /sys/class/power_supply/BAT*; do [ -e "$b" ] && cat "$b/capacity" 2>/dev/null && break; done)"
+TOP="$(ps -eo rss=,comm= --sort=-rss | head -8 | awk '{printf "  %6.1f MB  %s\n", $1/1024, $2}')"
+TEXT="<b>tinywin 1.0</b>  ($(uname -m))
+
+<b>Memory</b>
+  Installed:   ${MEMTOTAL} MB
+  Available:   ${MEMAVAIL} MB
+  Swap:        ${SWAPTOTAL} MB
+<b>Storage</b>
+  Root:        ${ROOT}
+<b>System</b>
+  CPU:         ${CPU}
+  Cores:       ${CORES}
+  Kernel:      ${KERNEL}
+  Uptime:      ${UPTIME:-just booted}
+  Theme:       ${DE:-unknown}
+<b>Network</b>
+  WiFi:        ${WIFI:-not connected}
+  IP:          ${IP:-none}
+  Battery:     ${BAT:+${BAT}%}${BAT:-AC power}
+
+<b>Biggest processes (RSS)</b>
+<tt>${TOP}</tt>
+
+<i>No background updaters, no telemetry, no indexers running.</i>"
+if [ "${1:-}" = "--text" ]; then
+  printf '%s\n' "$TEXT" | sed 's/<[^>]*>//g; s/&amp;/\&/g'
+else
+  zenity --info --title="System info" --width=560 --text="$TEXT" 2>/dev/null
+fi

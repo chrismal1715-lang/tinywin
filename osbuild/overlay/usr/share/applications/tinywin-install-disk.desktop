@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Install tinywin to internal disk
+Comment=Copy this running system onto the Chromebook eMMC (erases the disk)
+Exec=/usr/local/bin/tinywin-install-disk
+Icon=drive-harddisk
+Terminal=false
+Categories=System;
+Keywords=install;disk;emmc;chromebook;

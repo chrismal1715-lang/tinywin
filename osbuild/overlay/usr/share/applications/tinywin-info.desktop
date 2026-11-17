@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=System info
+Comment=Memory, storage, network and running processes
+Exec=/usr/local/bin/tinywin-info
+Icon=help-about
+Terminal=false
+Categories=System;
+Keywords=about;memory;ram;disk;status;

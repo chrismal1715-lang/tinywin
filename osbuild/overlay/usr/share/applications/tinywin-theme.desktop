@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Themes
+Comment=Change the look of the desktop
+Exec=/usr/local/bin/tinywin-theme
+Icon=preferences-desktop-theme
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=theme;appearance;icons;wallpaper;dark;

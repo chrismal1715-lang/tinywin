@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Updates
+Comment=Check for and install system updates
+Exec=/usr/local/bin/tinywin-update
+Icon=software-update-available
+Terminal=false
+Categories=System;Settings;
+Keywords=update;upgrade;system;

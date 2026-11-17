@@ -1,0 +1,182 @@
+#!/bin/bash
+# ===========================================================================
+#  tinywin-install — one dialog for whatever you downloaded.
+#    .deb            -> installed with apt (dependencies included)
+#    .AppImage       -> copied to ~/Applications, executable, menu entry
+#    .zip/.tar.*/.7z -> unpacked, and if a program is inside, offered as a menu
+#                       entry and runnable straight away  ("zips like Windows")
+#    .sh / .run      -> made executable and offered to run
+#  Double-click the file, or: tinywin-install ~/Downloads/thing.zip
+# ===========================================================================
+set -u
+export PATH="$PATH:/usr/sbin:/sbin"
+APPDIR="$HOME/Applications"
+DESKTOP_DIR="$HOME/.local/share/applications"
+
+msg()  { zenity --info  --title="Install app" --width=460 --text="$1" 2>/dev/null; }
+err()  { zenity --error --title="Install app" --width=480 --text="$1" 2>/dev/null; }
+ask()  { zenity --question --title="Install app" --width=480 --text="$1" 2>/dev/null; }
+notify(){ notify-send -a "tinywin" -i system-software-install "$@" 2>/dev/null || true; }
+
+run_term() {
+  local title="$1"; shift
+  local cmd
+  cmd="$(printf '%q ' "$@")"
+  if command -v xfce4-terminal >/dev/null; then
+    xfce4-terminal --title="$title" --hold --geometry=100x28 -x bash -c "$cmd" 2>/dev/null &
+  else
+    bash -c "$cmd"
+  fi
+}
+
+slugify() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//'; }
+
+make_launcher() {  # $1 display name, $2 exec path, $3 icon
+  local name="$1" exec_path="$2" icon="${3:-application-x-executable}" slug desk
+  slug="$(slugify "$name")"; mkdir -p "$DESKTOP_DIR"; desk="$DESKTOP_DIR/$slug.desktop"
+  cat > "$desk" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=$name
+Comment=Installed with tinywin-install
+Exec="$exec_path"
+Icon=$icon
+Terminal=false
+Categories=Utility;X-tinywin;
+StartupNotify=true
+EOF
+  chmod +x "$desk"
+  update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
+}
+
+find_program() {
+  local dir="$1"
+  find "$dir" -maxdepth 4 -type f \( -perm -u+x -o -name '*.AppImage' \) \
+       ! -name '*.so' ! -name '*.so.*' ! -name '*.sh' ! -name '*.txt' \
+       ! -path '*/lib/*' ! -path '*/lib64/*' ! -path '*/locale/*' ! -path '*/doc/*' \
+       2>/dev/null | head -25 | while read -r f; do
+         file -b "$f" 2>/dev/null | grep -qiE 'ELF .*executable|ELF 64-bit|shell script' && printf '%s\n' "$f"
+       done
+}
+
+main() {
+  local FILE="${1:-}"
+  [ -z "$FILE" ] && FILE="$(zenity --file-selection --title="Choose a program or archive" \
+      --filename="$HOME/Downloads/" 2>/dev/null)"
+  [ -n "$FILE" ] || exit 0
+  FILE="$(readlink -f "$FILE")"
+  [ -f "$FILE" ] || { err "Not a file:\n$FILE"; exit 1; }
+  local base="${FILE##*/}" lower="${base,,}" lower2="${base,,}"
+
+  case "$lower2" in
+  *.deb)
+    if ask "<b>Install $base?</b>
+
+This is a Debian package. It installs with apt in a terminal you can watch,
+and any dependencies come with it.
+
+Remove later with:  sudo apt remove <name>"; then
+      run_term "Installing $base" \
+        "echo 'Installing $base ...'; echo; sudo -n apt-get install -y \"$FILE\"; rc=\$?; echo; \
+         if [ \$rc -eq 0 ]; then echo 'Done — it should be in the Start menu now.'; \
+         notify-send -a tinywin '$base installed'; else echo 'Failed (exit '\$rc'). Scroll up.'; fi; \
+         echo; echo 'Press Enter to close.'; read -r"
+      notify "Installing $base" "Watch the terminal window."
+    fi ;;
+  *.appimage)
+    mkdir -p "$APPDIR"; local dest="$APPDIR/$base"
+    cp -f "$FILE" "$dest" && chmod +x "$dest" || { err "Could not copy to $APPDIR"; exit 1; }
+    local name="${base%.*}"; make_launcher "$name" "$dest" >/dev/null
+    notify "$name installed" "Added to the Start menu."
+    if ask "<b>$name is ready.</b>
+
+Copied to $APPDIR and added to the Start menu. Run it now?"; then
+      ( cd "$HOME" && "$dest" >/dev/null 2>&1 & )
+    fi
+    msg "<b>$name installed.</b>
+
+Start menu → Utility → $name
+The file itself is in ~/Applications." ;;
+  *.sh|*.run|*.bin)
+    chmod +x "$FILE"
+    if ask "<b>Run $base?</b>
+
+tinywin made it executable. Only run scripts you trust — this one runs with
+your permissions."; then
+      run_term "Running $base" "cd \"$(dirname "$FILE")\" && ./\"$base\"; echo; echo 'Finished. Press Enter.'; read -r"
+    fi ;;
+  *.zip|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.tbz|*.tbz2|*.7z|*.gz|*.xz)
+    local stem="${base%.*}"; stem="${stem%.tar}"
+    mkdir -p "$APPDIR"
+    local where
+    where="$(zenity --file-selection --directory --title="Unpack $base into…" \
+                   --filename="$APPDIR/$stem/" 2>/dev/null)" || exit 0
+    [ -n "$where" ] || exit 0
+    mkdir -p "$where"
+    run_term "Unpacking $base" \
+      "cd \"$where\" || exit 1; echo 'Extracting $base into:' \"\$(pwd)\"; echo; \
+       case \"$lower\" in \
+         *.zip) unzip -o \"$FILE\" ;; \
+         *.7z)  7z x -y \"$FILE\" ;; \
+         *.tar.gz|*.tgz) tar -xzf \"$FILE\" ;; \
+         *.tar.xz|*.txz) tar -xJf \"$FILE\" ;; \
+         *.tar.bz2|*.tbz|*.tbz2) tar -xjf \"$FILE\" ;; \
+         *.tar) tar -xf \"$FILE\" ;; \
+         *.gz)  gunzip -kf \"$FILE\" ;; \
+         *.xz)  unxz -kf \"$FILE\" ;; \
+       esac; echo; echo 'Done. Press Enter to close.'; read -r"
+    sleep 4
+    local progs; progs="$(find_program "$where")"
+    if [ -z "$progs" ]; then
+      msg "<b>Unpacked to:</b>
+$where
+
+No runnable program inside — looks like plain files or documents.
+The folder is open in the file manager."
+      thunar "$where" >/dev/null 2>&1 &
+      return 0
+    fi
+    local chosen
+    if [ "$(printf '%s\n' "$progs" | wc -l)" -eq 1 ]; then
+      chosen="$progs"
+      if ! ask "<b>Found a program in the archive:</b>
+
+$(basename "$chosen")
+
+Add it to your applications (Start menu)?"; then
+        thunar "$where" >/dev/null 2>&1 &
+        return 0
+      fi
+    else
+      chosen="$(printf '%s\n' "$progs" | sed "s|$where/||" | zenity --list --title="Which program?" \
+                --text="This archive has several programs. Pick one for the Start menu:" \
+                --column="Program" --width=520 --height=380 2>/dev/null)" || exit 0
+      [ -n "$chosen" ] || exit 0
+      chosen="$where/$chosen"
+    fi
+    chmod +x "$chosen" 2>/dev/null || true
+    local nm; nm="$(zenity --entry --title="Name it" --text="Name in the Start menu:" \
+                   --entry-text="$(basename "$chosen" | sed 's/\.[^.]*$//')" 2>/dev/null)" || exit 0
+    [ -n "$nm" ] || nm="$(basename "$chosen")"
+    make_launcher "$nm" "$chosen" >/dev/null
+    notify "$nm added" "It is in your Start menu."
+    if ask "<b>$nm is installed.</b>
+
+Start menu → Utility → $nm
+
+Run it now?"; then
+      ( cd "$(dirname "$chosen")" && ./"$(basename "$chosen")" >/dev/null 2>&1 & )
+    fi ;;
+  *)
+    err "<b>Don't know how to install this:</b>
+
+$base
+
+The system sees it as:
+$(file -b "$FILE" 2>/dev/null)
+
+Supported: .deb, .AppImage, .zip, .tar.gz, .tar.xz, .tar.bz2, .7z, .sh, .run" ;;
+  esac
+}
+main "$@"

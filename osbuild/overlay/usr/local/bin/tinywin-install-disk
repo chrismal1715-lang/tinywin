@@ -1,0 +1,159 @@
+#!/bin/bash
+# ===========================================================================
+#  tinywin-install-disk — clone this running (USB) system onto the internal
+#  disk, for a Chromebook that has no operating system at all.
+#
+#  Nothing is assumed about the target: it may be an empty disk, a former
+#  ChromeOS disk, or a broken antiX install. Everything on it is erased.
+#
+#  The clone keeps the *same* filesystem UUID and PARTUUID as the running
+#  system, so /etc/fstab and /boot/grub/grub.cfg stay valid and the machine
+#  boots straight into the copy.
+# ===========================================================================
+set -u
+export PATH="$PATH:/usr/sbin:/sbin"
+msg()  { zenity --info  --title="Install to disk" --width=540 --text="$1" 2>/dev/null || echo "$1"; }
+err()  { zenity --error --title="Install to disk" --width=560 --text="$1" 2>/dev/null || echo "ERROR" >&2; }
+ask()  { zenity --question --title="Install to disk" --width=560 --text="$1" 2>/dev/null; }
+
+for t in sgdisk mkfs.vfat mkfs.ext4 rsync grub-install partx wipefs sfdisk; do
+  command -v "$t" >/dev/null || { err "Missing tool: <b>$t</b>
+
+This live system cannot write to a disk without it.
+Boot the USB again, or run: sudo apt install gdisk dosfstools e2fsprogs grub-pc-bin"; exit 1; }
+done
+
+# ---- what are we running from, and what can we install to? ----------------
+LIVESRC="$(findmnt -no SOURCE /)"
+LIVEDEV="$(readlink -f "$LIVESRC")"
+LIVEDISK="$(lsblk -no PKNAME "$LIVEDEV" 2>/dev/null | head -1)"
+LIVE_PARTUUID="$(blkid -s PARTUUID -o value "$LIVEDEV" 2>/dev/null)"
+LIVE_FSUUID="$(blkid -s UUID -o value "$LIVEDEV" 2>/dev/null)"
+[ -n "$LIVEDISK" ] || { err "tinywin is not running from a partitioned disk — cannot clone."; exit 1; }
+[ -n "$LIVE_PARTUUID" ] || { err "Cannot read the running partition's PARTUUID."; exit 1; }
+
+ARGS=(); n=0
+while read -r name size model tran; do
+  [ -z "$name" ] && continue
+  [ "$name" = "$LIVEDISK" ] && continue
+  # skip the live disk's own partitions and anything non-disk
+  case "$name" in mmcblk*|nvme*) [ -e "/sys/block/$name" ] || continue ;; esac
+  n=$((n+1)); ARGS+=("$n" "/dev/$name" "$size" "${model:-unknown}")
+done < <(lsblk -dno NAME,SIZE,MODEL,TRAN 2>/dev/null | awk '$1!~/^(loop|ram|zram|sr)/')
+
+if [ "$n" -eq 0 ]; then
+  err "No installable disk found.
+
+tinywin is running from <b>/dev/$LIVEDISK</b>. To install to the internal
+drive you must boot from the USB stick while the internal drive is free —
+and the internal drive must be visible here (check 'lsblk')."
+  exit 1
+fi
+
+TARGET="$(zenity --list --title="Install tinywin to the internal disk" --width=680 --height=340 \
+  --text="<b>Which disk should tinywin be installed to?</b>
+
+Every partition and file on it is erased — ChromeOS, antiX, anything.
+The blank 64 GB eMMC is usually the 58–64 GB entry." \
+  --hide-column=1 --print-column=2 --column="#" --column="Disk" --column="Size" --column="Model" \
+  "${ARGS[@]}" 2>/dev/null)" || exit 0
+[ -n "$TARGET" ] || exit 0
+
+SIZED="$(lsblk -dno SIZE "$TARGET" | tr -d ' ')"
+MODELD="$(lsblk -dno MODEL "$TARGET" | sed 's/  */ /g')"
+if ! ask "<b>Erase $TARGET — $SIZED $MODELD ?</b>
+
+This deletes every partition on that disk, then copies tinywin onto it
+($(df -h / | awk 'NR==2{print $3}') of files, a few minutes).
+
+There is no undo."; then exit 0; fi
+CONFIRM="$(zenity --entry --title="Last check" --text="Type ERASE (in capitals) to wipe $TARGET:" 2>/dev/null)"
+[ "$CONFIRM" = "ERASE" ] || { msg "Cancelled — nothing was changed."; exit 0; }
+
+INNER=$(mktemp /tmp/tinywin-install.XXXXXX.sh)
+cat > "$INNER" <<'INSTALLER'
+#!/bin/bash
+set -u
+DEV=$1; LIVE_PARTUUID=$2; LIVE_FSUUID=$3
+ROOTMP=/var/tmp/tinywin-install/root
+ESPMP=/var/tmp/tinywin-install/esp
+mkdir -p "$ROOTMP" "$ESPMP"
+die() { echo; echo "FAILED: $*"; echo; echo "Press Enter to close."; read -r; exit 1; }
+
+echo "=== 1/6  Partitioning $DEV ==="
+umount "${DEV}"?* 2>/dev/null || true
+wipefs -a "$DEV" 2>/dev/null || true
+sgdisk --zap-all "$DEV" >/dev/null 2>&1 || true
+sgdisk --clear \
+  --new=1:2048:+2M --typecode=1:EF02 --change-name=1:bios_grub \
+  --new=2:0:+512M  --typecode=2:EF00 --change-name=2:TINYWIN-ESP \
+  --new=3:0:0      --typecode=3:8300 --change-name=3:tinywin \
+  "$DEV" >/dev/null || die "sgdisk could not partition $DEV"
+# the copy must carry the SAME PARTUUID as this live system, or fstab/grub.cfg
+# (which are already written) would point at nothing
+sgdisk --partition-guid=3:"$LIVE_PARTUUID" "$DEV" >/dev/null || die "could not set PARTUUID"
+partx -u "$DEV" 2>/dev/null || blockdev --rereadpt "$DEV" 2>/dev/null || true
+sleep 2
+ROOTDEV="$(lsblk -no NAME,LABEL "$DEV" 2>/dev/null | awk '$2=="tinywin"{print "/dev/"$1}' | head -1)"
+[ -n "$ROOTDEV" ] || ROOTDEV="$DEV"3
+ESPDEV="$(lsblk -no NAME,PARTLABEL "$DEV" 2>/dev/null | awk '$2=="TINYWIN-ESP"{print "/dev/"$1}' | head -1)"
+[ -n "$ESPDEV" ] || ESPDEV="$DEV"2
+echo "    root -> $ROOTDEV   esp -> $ESPDEV"
+
+echo "=== 2/6  Formatting ==="
+mkfs.vfat -F32 -n TINYWIN-ESP "$ESPDEV" >/dev/null || die "mkfs.vfat failed"
+mkfs.ext4 -q -F -m 0 -L tinywin -U "$LIVE_FSUUID" "$ROOTDEV" || die "mkfs.ext4 failed"
+
+echo "=== 3/6  Copying the running system (a few minutes) ==="
+mount "$ROOTDEV" "$ROOTMP" || die "could not mount $ROOTDEV"
+rsync -aHAX --info=progress2 -x \
+  --exclude=/proc/'*' --exclude=/sys/'*' --exclude=/dev/'*' --exclude=/run/'*' \
+  --exclude=/tmp/'*' --exclude=/var/tmp/tinywin-install/'*' \
+  --exclude=/mnt/'*' --exclude=/media/'*' --exclude=/var/log/'*' \
+  / "$ROOTMP"/ || die "rsync failed (disk full or unreadable?)"
+mkdir -p "$ROOTMP"/proc "$ROOTMP"/sys "$ROOTMP"/dev "$ROOTMP"/run "$ROOTMP"/tmp \
+         "$ROOTMP"/mnt "$ROOTMP"/media "$ROOTMP"/var/tmp "$ROOTMP"/var/log
+chmod 1777 "$ROOTMP"/tmp "$ROOTMP"/var/tmp
+
+echo "=== 4/6  UEFI bootloader on the ESP ==="
+mount "$ESPDEV" "$ESPMP" || die "could not mount $ESPDEV"
+mkdir -p "$ESPMP/EFI/BOOT" "$ESPMP/boot/grub/fonts"
+if [ -f "$ROOTMP/boot/efi/EFI/BOOT/BOOTX64.EFI" ]; then
+  cp -f "$ROOTMP/boot/efi/EFI/BOOT/BOOTX64.EFI" "$ESPMP/EFI/BOOT/"
+else
+  # regenerate a standalone image that embeds this system's grub.cfg
+  grub-mkstandalone -O x86_64-efi \
+    --modules="part_gpt part_msdos fat ext2 normal search search_label search_fs_uuid \
+configfile linux echo test loadenv all_video gfxterm font video_bochs video_cirrus minicmd reboot halt" \
+    -o "$ESPMP/EFI/BOOT/BOOTX64.EFI" \
+    "boot/grub/grub.cfg=$ROOTMP/boot/grub/grub.cfg" || die "grub-mkstandalone failed"
+fi
+[ -f /usr/share/grub/unicode.pf2 ] && cp -f /usr/share/grub/unicode.pf2 "$ESPMP/boot/grub/fonts/" 2>/dev/null
+printf 'fs0:\nEFI\\BOOT\\BOOTX64.EFI\n' > "$ESPMP/EFI/BOOT/STARTUP.NSH"
+sync; umount "$ESPMP"
+
+echo "=== 5/6  Legacy (SeaBIOS) bootloader ==="
+grub-install --target=i386-pc --boot-directory="$ROOTMP/boot" --recheck \
+  --no-floppy "$DEV" || echo "    (i386-pc install failed — UEFI boot still works)"
+
+echo "=== 6/6  Finishing ==="
+sync; umount "$ROOTMP"; sync
+echo
+echo "Installed to $DEV ($(lsblk -dno SIZE "$DEV" | tr -d ' '))."
+echo "  UEFI  : \\\\EFI\\\\BOOT\\\\BOOTX64.EFI"
+echo "  legacy: MBR + core.img on the bios_grub partition"
+echo
+if zenity --question --title="Done" --width=420 \
+     --text="tinywin is installed. Remove the USB stick and restart now?" 2>/dev/null; then
+  sudo systemctl reboot
+fi
+echo "Press Enter to close."; read -r
+INSTALLER
+chmod +x "$INNER"
+
+if command -v xfce4-terminal >/dev/null; then
+  xfce4-terminal --title="Installing tinywin to $TARGET — do not close this window" \
+    --geometry=110x34 --hold -x bash "$INNER" "$TARGET" "$LIVE_PARTUUID" "$LIVE_FSUUID" &
+else
+  bash "$INNER" "$TARGET" "$LIVE_PARTUUID" "$LIVE_FSUUID"
+fi
