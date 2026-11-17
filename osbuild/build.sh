@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
     --hostname)      HOSTNAME_T=${2:?}; shift 2 ;;
     --timezone)      TIMEZONE=${2:?}; shift 2 ;;
     --keyboard)      KEYBOARD=${2:?}; shift 2 ;;
-    --extra-pkgs)    EXTRA_PKGS=${2:?}; shift 2 ;;
+    --extra-pkgs)    EXTRA_PKGS=${2:-}; shift 2 ;;
     --size)          SIZE=${2:?}; shift 2 ;;
     --out)           OUT=${2:?}; shift 2 ;;
     --work)          WORK=${2:?}; shift 2 ;;
